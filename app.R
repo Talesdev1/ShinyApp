@@ -2,7 +2,6 @@ library(shiny)
 library(shinydashboard)
 library(DT)
 
-# UI (User Interface)
 ui <- dashboardPage(
   dashboardHeader(title = "Método Simplex"),
   
@@ -15,7 +14,6 @@ ui <- dashboardPage(
   
   dashboardBody(
     tabItems(
-      # Tab de entrada de dados
       tabItem(tabName = "dados",
               fluidRow(
                 box(width = 12, title = "Configuração do Problema", status = "primary",
@@ -34,7 +32,6 @@ ui <- dashboardPage(
               )
       ),
       
-      # Tab de solução
       tabItem(tabName = "solucao",
               fluidRow(
                 box(width = 12, title = "Solução do Problema", status = "success",
@@ -43,6 +40,9 @@ ui <- dashboardPage(
                     
                     h3("Iterações do Simplex"),
                     uiOutput("iteracoes_ui"),
+                    
+                    h3("Tableau Final"),
+                    DTOutput("tableau_final"),
                     
                     h3("Solução Ótima"),
                     verbatimTextOutput("solucao_otima"),
@@ -56,19 +56,21 @@ ui <- dashboardPage(
   )
 )
 
-# Server (Lógica do Aplicativo)
 server <- function(input, output, session) {
   # Gera os campos de entrada para as restrições
   output$restricoes_ui <- renderUI({
-    req(input$num_restr, input$num_var)
+    req(input$num_var, input$num_restr)
     
     restricoes <- lapply(1:input$num_restr, function(i) {
       fluidRow(
-        column(width = input$num_var * 2,
+        column(width = 8,
                lapply(1:input$num_var, function(j) {
                  numericInput(paste0("restr_", i, "_var_", j), 
-                              paste0("Coeficiente x", j), 
-                              value = ifelse(i == 1, ifelse(j == 1, 1, ifelse(j == 2 && i == 3, 2, 0)), 0))
+                              paste0("x", j), 
+                              value = ifelse(i == 1 && j == 1, 1,
+                                             ifelse(i == 2 && j == 2, 2,
+                                                    ifelse(i == 3 && j == 1, 3,
+                                                           ifelse(i == 3 && j == 2, 2, 0)))))
                })
         ),
         column(width = 2,
@@ -77,7 +79,9 @@ server <- function(input, output, session) {
                            selected = "<=")
         ),
         column(width = 2,
-               numericInput(paste0("termo_indep_", i), "Termo Indep.", value = ifelse(i == 1, 4, ifelse(i == 2, 12, 18)))
+               numericInput(paste0("termo_indep_", i), "b", 
+                            value = ifelse(i == 1, 4, 
+                                           ifelse(i == 2, 12, 18)))
         )
       )
     })
@@ -198,7 +202,9 @@ server <- function(input, output, session) {
       iteracoes = iteracoes,
       tableau_final = tableau,
       solucao = solucao,
-      valor_otimo = valor_otimo
+      valor_otimo = valor_otimo,
+      colnames = colnames(tableau),
+      rownames = rownames(tableau)
     ))
   }
   
@@ -224,11 +230,18 @@ server <- function(input, output, session) {
     maximizar <- input$tipo_otim == "max"
     
     # Executa o método simplex
-    resultado <- simplex_shiny(obj, A, b, operadores, maximizar)
+    resultado <- tryCatch({
+      simplex_shiny(obj, A, b, operadores, maximizar)
+    }, error = function(e) {
+      showNotification(paste("Erro:", e$message), type = "error")
+      return(NULL)
+    })
+    
+    if (is.null(resultado)) return()
     
     # Armazena os resultados para exibição
     output$tableau_inicial <- renderDT({
-      datatable(resultado$tableau_inicial, 
+      datatable(as.data.frame(resultado$tableau_inicial),
                 options = list(dom = 't', scrollX = TRUE),
                 rownames = TRUE)
     })
@@ -253,7 +266,7 @@ server <- function(input, output, session) {
         local({
           ii <- i
           output[[paste0("tableau_iter_", ii)]] <- renderDT({
-            datatable(resultado$iteracoes[[ii]]$tableau,
+            datatable(as.data.frame(resultado$iteracoes[[ii]]$tableau),
                       options = list(dom = 't', scrollX = TRUE),
                       rownames = TRUE)
           })
@@ -261,6 +274,14 @@ server <- function(input, output, session) {
       }
       
       do.call(tagList, iteracoes)
+    })
+    
+    output$tableau_final <- renderDT({
+      datatable(as.data.frame(resultado$tableau_final),
+                options = list(dom = 't', scrollX = TRUE),
+                rownames = TRUE) %>%
+        formatStyle(0, target = 'row', 
+                    backgroundColor = styleEqual(c("Z"), c("#E6F3FF")))
     })
     
     output$solucao_otima <- renderPrint({
@@ -283,5 +304,4 @@ server <- function(input, output, session) {
   })
 }
 
-# Executa o aplicativo
 shinyApp(ui, server)
