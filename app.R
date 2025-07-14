@@ -1,260 +1,287 @@
 library(shiny)
-library(ggplot2)
-library(lpSolve)
-library(reshape2)
+library(shinydashboard)
+library(DT)
 
-# UI (Interface do Usuário)
-ui <- fluidPage(
-  titlePanel("Solução Gráfica de Problemas de Programação Linear"),
-  sidebarLayout(
-    sidebarPanel(
-      h4("Função Objetivo"),
-      numericInput("obj_x1", "Coeficiente de x1:", value = 3),
-      numericInput("obj_x2", "Coeficiente de x2:", value = 2),
-      radioButtons("obj_type", "Tipo de objetivo:", 
-                   choices = c("Maximizar" = "max", "Minimizar" = "min"), 
-                   selected = "max"),
+# UI (User Interface)
+ui <- dashboardPage(
+  dashboardHeader(title = "Método Simplex"),
+  
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Entrada de Dados", tabName = "dados", icon = icon("table")),
+      menuItem("Solução", tabName = "solucao", icon = icon("calculator"))
+    )
+  ),
+  
+  dashboardBody(
+    tabItems(
+      # Tab de entrada de dados
+      tabItem(tabName = "dados",
+              fluidRow(
+                box(width = 12, title = "Configuração do Problema", status = "primary",
+                    numericInput("num_var", "Número de Variáveis de Decisão:", value = 2, min = 1),
+                    textInput("obj_func", "Coeficientes da Função Objetivo (separados por vírgula):", "3,5"),
+                    selectInput("tipo_otim", "Tipo de Otimização:", choices = c("Maximização" = "max", "Minimização" = "min"))
+                )
+              ),
+              
+              fluidRow(
+                box(width = 12, title = "Restrições", status = "primary",
+                    numericInput("num_restr", "Número de Restrições:", value = 3, min = 1),
+                    uiOutput("restricoes_ui"),
+                    actionButton("resolver", "Resolver Problema", class = "btn-success")
+                )
+              )
+      ),
       
-      hr(),
-      h4("Restrições"),
-      numericInput("num_constraints", "Número de restrições:", 
-                   value = 3, min = 1, max = 10),
-      uiOutput("constraints_ui"),
-      
-      actionButton("solve", "Resolver PPL", class = "btn-primary")
-    ),
-    mainPanel(
-      plotOutput("ppl_plot", height = "600px"),
-      verbatimTextOutput("solution_output")
+      # Tab de solução
+      tabItem(tabName = "solucao",
+              fluidRow(
+                box(width = 12, title = "Solução do Problema", status = "success",
+                    h3("Tableau Inicial"),
+                    DTOutput("tableau_inicial"),
+                    
+                    h3("Iterações do Simplex"),
+                    uiOutput("iteracoes_ui"),
+                    
+                    h3("Solução Ótima"),
+                    verbatimTextOutput("solucao_otima"),
+                    
+                    h3("Valor Ótimo"),
+                    verbatimTextOutput("valor_otimo")
+                )
+              )
+      )
     )
   )
 )
 
-# Server (Lógica do Servidor)
+# Server (Lógica do Aplicativo)
 server <- function(input, output, session) {
-  
-  # Gerar UI dinâmica para as restrições
-  output$constraints_ui <- renderUI({
-    num_constraints <- input$num_constraints
-    lapply(1:num_constraints, function(i) {
+  # Gera os campos de entrada para as restrições
+  output$restricoes_ui <- renderUI({
+    req(input$num_restr, input$num_var)
+    
+    restricoes <- lapply(1:input$num_restr, function(i) {
       fluidRow(
-        column(3, numericInput(paste0("con_a", i), "Coef. x1", value = ifelse(i == 1, 2, ifelse(i == 2, 1, 1)))),
-        column(3, numericInput(paste0("con_b", i), "Coef. x2", value = ifelse(i == 1, 1, ifelse(i == 2, 1, 0)))),
-        column(3, selectInput(paste0("con_dir", i), "Des.", 
-                              choices = c("<=" = "<=", ">=" = ">=", "=" = "=="), 
-                              selected = "<=")),
-        column(3, numericInput(paste0("con_rhs", i), "Valor", value = ifelse(i == 1, 100, ifelse(i == 2, 80, 40))))
+        column(width = input$num_var * 2,
+               lapply(1:input$num_var, function(j) {
+                 numericInput(paste0("restr_", i, "_var_", j), 
+                              paste0("Coeficiente x", j), 
+                              value = ifelse(i == 1, ifelse(j == 1, 1, ifelse(j == 2 && i == 3, 2, 0)), 0))
+               })
+        ),
+        column(width = 2,
+               selectInput(paste0("operador_", i), "Operador",
+                           choices = c("<=" = "<=", ">=" = ">=", "=" = "=="),
+                           selected = "<=")
+        ),
+        column(width = 2,
+               numericInput(paste0("termo_indep_", i), "Termo Indep.", value = ifelse(i == 1, 4, ifelse(i == 2, 12, 18)))
+        )
       )
     })
+    
+    do.call(tagList, restricoes)
   })
   
-  # Função para resolver e plotar o PPL (mesma função do código anterior adaptada)
-  solve_ppl <- eventReactive(input$solve, {
-    # Coletar dados da função objetivo
-    objective <- c(input$obj_x1, input$obj_x2)
-    objective_type <- input$obj_type
-    
-    # Coletar dados das restrições
-    num_constraints <- input$num_constraints
-    
-    constraints <- matrix(nrow = num_constraints, ncol = 2)
-    directions <- character(num_constraints)
-    rhs <- numeric(num_constraints)
-    
-    for (i in 1:num_constraints) {
-      constraints[i, ] <- c(input[[paste0("con_a", i)]], input[[paste0("con_b", i)]])
-      directions[i] <- input[[paste0("con_dir", i)]]
-      rhs[i] <- input[[paste0("con_rhs", i)]]
+  # Função simplex adaptada para o Shiny
+  simplex_shiny <- function(obj, A, b, operadores, maximizar = TRUE) {
+    if (!maximizar) {
+      obj <- -obj
     }
     
-    # Resolver o PPL
-    solution <- lp(objective_type, objective, constraints, directions, rhs)
+    m <- nrow(A)
+    n <- ncol(A)
     
-    if (solution$status != 0) {
-      return(list(error = "O problema não tem solução viável ou é ilimitado."))
+    folga <- which(operadores == "<=")
+    excesso <- which(operadores == ">=")
+    igual <- which(operadores == "==")
+    
+    # Cria tableau aumentado
+    tableau <- matrix(0, nrow = m + 1, ncol = n + length(folga) + length(excesso) * 2 + length(igual) + 1)
+    tableau[1:m, 1:n] <- A
+    tableau[1:m, ncol(tableau)] <- b
+    
+    # Adiciona variáveis de folga
+    col_folga <- n + 1
+    for (i in folga) {
+      tableau[i, col_folga] <- 1
+      col_folga <- col_folga + 1
     }
     
-    # Determinar limites do gráfico
-    max_x <- max(ifelse(constraints[,1] != 0, rhs/constraints[,1], rhs), na.rm = TRUE) * 1.2
-    max_y <- max(ifelse(constraints[,2] != 0, rhs/constraints[,2], rhs), na.rm = TRUE) * 1.2
+    # Adiciona variáveis de excesso e artificiais para >=
+    for (i in excesso) {
+      tableau[i, col_folga] <- -1
+      tableau[i, col_folga + 1] <- 1
+      col_folga <- col_folga + 2
+    }
     
-    x_lim <- c(0, max_x)
-    y_lim <- c(0, max_y)
+    # Adiciona variáveis artificiais para ==
+    for (i in igual) {
+      tableau[i, col_folga] <- 1
+      col_folga <- col_folga + 1
+    }
     
-    # Criar sequência de valores para x1
-    x1 <- seq(x_lim[1], x_lim[2], length.out = 100)
+    tableau[m + 1, 1:n] <- -obj
     
-    # Calcular restrições
-    constraint_data <- data.frame(x1 = numeric(), value = numeric(), variable = character())
+    # Nomes das colunas
+    colnames <- paste0("x", 1:n)
+    if (length(folga) > 0) colnames <- c(colnames, paste0("f", 1:length(folga)))
+    if (length(excesso) > 0) {
+      colnames <- c(colnames, paste0("e", 1:length(excesso)))
+      colnames <- c(colnames, paste0("a", 1:length(excesso)))
+    }
+    if (length(igual) > 0) colnames <- c(colnames, paste0("a", length(excesso) + 1:length(igual)))
+    colnames <- c(colnames, "b")
     
-    for (i in 1:num_constraints) {
-      a <- constraints[i, 1]
-      b <- constraints[i, 2]
-      c <- rhs[i]
-      dir <- directions[i]
+    colnames(tableau) <- colnames
+    rownames(tableau) <- c(paste0("R", 1:m), "Z")
+    
+    # Armazena o tableau inicial
+    tableau_inicial <- tableau
+    
+    iteracoes <- list()
+    iter_count <- 0
+    
+    while (TRUE) {
+      linha_z <- tableau[nrow(tableau), -ncol(tableau)]
+      if (all(linha_z >= 0)) {
+        break
+      }
       
-      if (b != 0) {
-        x2_values <- (c - a * x1) / b
-        constraint_data <- rbind(constraint_data,
-                                 data.frame(x1 = x1, 
-                                            value = x2_values,
-                                            variable = paste0("R", i, ": ", 
-                                                              a, "x1 + ", b, "x2 ", dir, " ", c),
-                                            stringsAsFactors = FALSE))
+      entra <- which.min(linha_z)
+      ratios <- tableau[1:m, ncol(tableau)] / tableau[1:m, entra]
+      ratios[tableau[1:m, entra] <= 0] <- Inf
+      
+      if (all(is.infinite(ratios))) {
+        break
+      }
+      
+      sai <- which.min(ratios)
+      
+      iter_count <- iter_count + 1
+      
+      # Armazena informações da iteração ANTES do pivoteamento
+      iteracao <- list(
+        entra = colnames(tableau)[entra],
+        sai = rownames(tableau)[sai],
+        tableau = tableau
+      )
+      iteracoes[[iter_count]] <- iteracao
+      
+      # Pivoteamento
+      pivot <- tableau[sai, entra]
+      tableau[sai, ] <- tableau[sai, ] / pivot
+      
+      for (i in 1:(m + 1)) {
+        if (i != sai) {
+          tableau[i, ] <- tableau[i, ] - tableau[i, entra] * tableau[sai, ]
+        }
+      }
+    }
+    
+    # Solução ótima
+    solucao <- rep(0, n)
+    for (i in 1:n) {
+      if (sum(tableau[1:m, i] == 1) == 1 && sum(tableau[1:m, i] != 0) == 1) {
+        linha <- which(tableau[1:m, i] == 1)
+        solucao[i] <- tableau[linha, ncol(tableau)]
+      }
+    }
+    
+    valor_otimo <- tableau[nrow(tableau), ncol(tableau)]
+    if (!maximizar) valor_otimo <- -valor_otimo
+    
+    return(list(
+      tableau_inicial = tableau_inicial,
+      iteracoes = iteracoes,
+      tableau_final = tableau,
+      solucao = solucao,
+      valor_otimo = valor_otimo
+    ))
+  }
+  
+  # Resolve o problema quando o botão é clicado
+  observeEvent(input$resolver, {
+    req(input$num_var, input$num_restr)
+    
+    # Coleta os dados de entrada
+    obj <- as.numeric(unlist(strsplit(input$obj_func, ",")))
+    
+    A <- matrix(0, nrow = input$num_restr, ncol = input$num_var)
+    b <- numeric(input$num_restr)
+    operadores <- character(input$num_restr)
+    
+    for (i in 1:input$num_restr) {
+      for (j in 1:input$num_var) {
+        A[i, j] <- input[[paste0("restr_", i, "_var_", j)]]
+      }
+      operadores[i] <- input[[paste0("operador_", i)]]
+      b[i] <- input[[paste0("termo_indep_", i)]]
+    }
+    
+    maximizar <- input$tipo_otim == "max"
+    
+    # Executa o método simplex
+    resultado <- simplex_shiny(obj, A, b, operadores, maximizar)
+    
+    # Armazena os resultados para exibição
+    output$tableau_inicial <- renderDT({
+      datatable(resultado$tableau_inicial, 
+                options = list(dom = 't', scrollX = TRUE),
+                rownames = TRUE)
+    })
+    
+    output$iteracoes_ui <- renderUI({
+      if (length(resultado$iteracoes) == 0) {
+        return(p("O tableau inicial já é ótimo."))
+      }
+      
+      iteracoes <- lapply(1:length(resultado$iteracoes), function(i) {
+        tagList(
+          h4(paste("Iteração", i)),
+          p(strong("Variável que entra:"), resultado$iteracoes[[i]]$entra),
+          p(strong("Variável que sai:"), resultado$iteracoes[[i]]$sai),
+          DTOutput(paste0("tableau_iter_", i)),
+          hr()
+        )
+      })
+      
+      # Renderiza os tableaus das iterações
+      for (i in 1:length(resultado$iteracoes)) {
+        local({
+          ii <- i
+          output[[paste0("tableau_iter_", ii)]] <- renderDT({
+            datatable(resultado$iteracoes[[ii]]$tableau,
+                      options = list(dom = 't', scrollX = TRUE),
+                      rownames = TRUE)
+          })
+        })
+      }
+      
+      do.call(tagList, iteracoes)
+    })
+    
+    output$solucao_otima <- renderPrint({
+      cat("Valores das variáveis de decisão:\n")
+      for (i in 1:length(resultado$solucao)) {
+        cat(paste0("x", i), "=", resultado$solucao[i], "\n")
+      }
+    })
+    
+    output$valor_otimo <- renderPrint({
+      if (input$tipo_otim == "max") {
+        cat("Valor máximo da função objetivo:", resultado$valor_otimo, "\n")
       } else {
-        x1_value <- c/a
-        constraint_data <- rbind(constraint_data,
-                                 data.frame(x1 = rep(x1_value, 2),
-                                            value = c(y_lim[1], y_lim[2]),
-                                            variable = paste0("R", i, ": ", 
-                                                              a, "x1 ", dir, " ", c),
-                                            stringsAsFactors = FALSE))
+        cat("Valor mínimo da função objetivo:", resultado$valor_otimo, "\n")
       }
-    }
+    })
     
-    # Encontrar vértices da região viável
-    find_vertices <- function() {
-      vertices <- data.frame(x1 = numeric(), x2 = numeric())
-      
-      for (i in 1:(num_constraints - 1)) {
-        for (j in (i + 1):num_constraints) {
-          A <- constraints[c(i, j), ]
-          b <- rhs[c(i, j)]
-          
-          if (abs(det(A)) > 1e-10) {
-            sol <- try(solve(A, b), silent = TRUE)
-            if (!inherits(sol, "try-error") && all(sol >= 0)) {
-              vertices <- rbind(vertices, data.frame(x1 = sol[1], x2 = sol[2]))
-            }
-          }
-        }
-      }
-      
-      for (i in 1:num_constraints) {
-        if (constraints[i, 1] != 0) {
-          x1_inter <- rhs[i] / constraints[i, 1]
-          if (x1_inter >= 0) {
-            vertices <- rbind(vertices, data.frame(x1 = x1_inter, x2 = 0))
-          }
-        }
-        
-        if (constraints[i, 2] != 0) {
-          x2_inter <- rhs[i] / constraints[i, 2]
-          if (x2_inter >= 0) {
-            vertices <- rbind(vertices, data.frame(x1 = 0, x2 = x2_inter))
-          }
-        }
-      }
-      
-      feasible_vertices <- data.frame(x1 = numeric(), x2 = numeric())
-      
-      if (nrow(vertices) > 0) {
-        for (k in 1:nrow(vertices)) {
-          point <- vertices[k, ]
-          feasible <- TRUE
-          
-          for (i in 1:num_constraints) {
-            lhs <- sum(constraints[i, ] * c(point$x1, point$x2))
-            if ((directions[i] == "<=" && lhs > rhs[i] + 1e-10) || 
-                (directions[i] == ">=" && lhs < rhs[i] - 1e-10)) {
-              feasible <- FALSE
-              break
-            }
-          }
-          
-          if (feasible) {
-            feasible_vertices <- rbind(feasible_vertices, point)
-          }
-        }
-      }
-      
-      origin_feasible <- TRUE
-      for (i in 1:num_constraints) {
-        lhs <- sum(constraints[i, ] * c(0, 0))
-        if ((directions[i] == "<=" && lhs > rhs[i] + 1e-10) || 
-            (directions[i] == ">=" && lhs < rhs[i] - 1e-10)) {
-          origin_feasible <- FALSE
-          break
-        }
-      }
-      
-      if (origin_feasible) {
-        feasible_vertices <- rbind(feasible_vertices, data.frame(x1 = 0, x2 = 0))
-      }
-      
-      if (nrow(feasible_vertices) > 0) {
-        center <- c(mean(feasible_vertices$x1), mean(feasible_vertices$x2))
-        angles <- atan2(feasible_vertices$x2 - center[2], feasible_vertices$x1 - center[1])
-        feasible_vertices <- feasible_vertices[order(angles), ]
-      }
-      
-      return(unique(feasible_vertices))
-    }
-    
-    vertices <- find_vertices()
-    
-    # Criar o gráfico
-    p <- ggplot() +
-      geom_line(data = constraint_data, aes(x = x1, y = value, color = variable), size = 1) +
-      geom_hline(yintercept = 0, color = "black") +
-      geom_vline(xintercept = 0, color = "black") +
-      labs(title = paste("Solução Gráfica do PPL -", 
-                         ifelse(objective_type == "max", "Maximização", "Minimização")),
-           x = "x1", y = "x2", color = "Restrições") +
-      theme_minimal() +
-      coord_cartesian(xlim = x_lim, ylim = y_lim) +
-      scale_color_discrete(labels = function(x) gsub("R\\d+: ", "", x))
-    
-    if (nrow(vertices) >= 3) {
-      p <- p + geom_polygon(data = vertices, aes(x = x1, y = x2), 
-                            fill = "lightblue", alpha = 0.4)
-    }
-    
-    p <- p + geom_point(aes(x = solution$solution[1], y = solution$solution[2]), 
-                        color = "red", size = 3)
-    
-    if (nrow(vertices) > 0) {
-      p <- p + 
-        annotate("text", 
-                 x = solution$solution[1] + 0.05 * diff(x_lim), 
-                 y = solution$solution[2] + 0.05 * diff(y_lim),
-                 label = sprintf("Ótimo: (%.2f, %.2f)\nZ = %.2f", 
-                                 solution$solution[1], 
-                                 solution$solution[2],
-                                 solution$objval))
-    }
-    
-    return(list(plot = p, 
-                solution = solution,
-                vertices = vertices,
-                constraints_data = constraint_data))
-  })
-  
-  # Renderizar o gráfico
-  output$ppl_plot <- renderPlot({
-    result <- solve_ppl()
-    if (!is.null(result$error)) {
-      plot(0, 0, type = "n", xlab = "", ylab = "", axes = FALSE)
-      text(0, 0, result$error, col = "red", cex = 1.5)
-    } else {
-      print(result$plot)
-    }
-  })
-  
-  # Mostrar a solução numérica
-  output$solution_output <- renderPrint({
-    result <- solve_ppl()
-    if (!is.null(result$error)) {
-      cat(result$error)
-    } else {
-      cat("Solução Ótima:\n")
-      cat(sprintf("x1 = %.2f\nx2 = %.2f\n\nValor da função objetivo: %.2f",
-                  result$solution$solution[1],
-                  result$solution$solution[2],
-                  result$solution$objval))
-    }
+    # Muda para a aba de solução
+    updateTabItems(session, "sidebar", "solucao")
   })
 }
 
-# Rodar o aplicativo
-shinyApp(ui = ui, server = server)
+# Executa o aplicativo
+shinyApp(ui, server)
