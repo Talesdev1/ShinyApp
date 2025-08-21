@@ -250,7 +250,7 @@ server <- function(input, output, session) {
         column(2,
                lapply(1:num_dest, function(j) {
                  numericInput(paste0("cost_", i, "_", j), 
-                              paste("Custo F", i, "???D", j),
+                              paste("Custo F", i, "→D", j),
                               value = sample(1:20, 1), min = 0)
                })
         )
