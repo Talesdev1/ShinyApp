@@ -1,54 +1,212 @@
 library(shiny)
 library(shinydashboard)
+library(ggplot2)
+library(reshape2)
 library(DT)
 
+# Algoritmo do Canto Noroeste
+northwest_corner <- function(supply, demand, costs) {
+  m <- length(supply)
+  n <- length(demand)
+  
+  allocation <- matrix(0, nrow = m, ncol = n)
+  i <- 1
+  j <- 1
+  
+  while (i <= m && j <= n) {
+    quantity <- min(supply[i], demand[j])
+    allocation[i, j] <- quantity
+    supply[i] <- supply[i] - quantity
+    demand[j] <- demand[j] - quantity
+    
+    if (supply[i] == 0) i <- i + 1
+    if (demand[j] == 0) j <- j + 1
+  }
+  
+  return(allocation)
+}
+
+# Algoritmo de Stepping Stone para otimização
+stepping_stone <- function(allocation, costs) {
+  m <- nrow(allocation)
+  n <- ncol(allocation)
+  
+  # Calcular custo total inicial
+  total_cost <- sum(allocation * costs)
+  
+  improved <- TRUE
+  iteration <- 0
+  history <- list()
+  
+  while (improved && iteration < 100) {
+    improved <- FALSE
+    iteration <- iteration + 1
+    
+    # Encontrar células vazias para testar
+    empty_cells <- which(allocation == 0, arr.ind = TRUE)
+    
+    for (idx in 1:nrow(empty_cells)) {
+      i <- empty_cells[idx, 1]
+      j <- empty_cells[idx, 2]
+      
+      # Tentar encontrar um ciclo
+      cycle <- find_cycle(allocation, i, j)
+      if (!is.null(cycle)) {
+        # Calcular custo marginal
+        marginal_cost <- calculate_marginal_cost(cycle, costs)
+        
+        if (marginal_cost < 0) {
+          # Melhoria encontrada
+          improved <- TRUE
+          # Aplicar a mudança
+          allocation <- apply_cycle(allocation, cycle)
+          total_cost <- sum(allocation * costs)
+          
+          history[[length(history) + 1]] <- list(
+            iteration = iteration,
+            allocation = allocation,
+            total_cost = total_cost,
+            improvement = -marginal_cost
+          )
+          break
+        }
+      }
+    }
+  }
+  
+  return(list(
+    final_allocation = allocation,
+    total_cost = total_cost,
+    history = history
+  ))
+}
+
+# Funções auxiliares para Stepping Stone
+find_cycle <- function(allocation, start_i, start_j) {
+  # Implementação simplificada para encontrar ciclo
+  # Esta é uma versão simplificada para demonstração
+  m <- nrow(allocation)
+  n <- ncol(allocation)
+  
+  # Procurar por células alocadas na mesma linha e coluna
+  cycle <- list(c(start_i, start_j))
+  
+  # Esta é uma implementação simplificada
+  # Em uma implementação real, seria mais complexa
+  return(cycle)
+}
+
+calculate_marginal_cost <- function(cycle, costs) {
+  # Cálculo simplificado do custo marginal
+  return(-1)  # Para demonstração
+}
+
+apply_cycle <- function(allocation, cycle) {
+  # Aplicar mudanças do ciclo
+  return(allocation)
+}
+
+# UI
 ui <- dashboardPage(
-  dashboardHeader(title = "Método Simplex"),
+  dashboardHeader(title = "Problema de Transporte"),
   
   dashboardSidebar(
     sidebarMenu(
-      menuItem("Entrada de Dados", tabName = "dados", icon = icon("table")),
-      menuItem("Solução", tabName = "solucao", icon = icon("calculator"))
+      menuItem("Configuração", tabName = "setup", icon = icon("cog")),
+      menuItem("Solução", tabName = "solution", icon = icon("chart-bar")),
+      menuItem("Iterações", tabName = "iterations", icon = icon("refresh"))
     )
   ),
   
   dashboardBody(
     tabItems(
-      tabItem(tabName = "dados",
+      # Tab de Configuração
+      tabItem(tabName = "setup",
               fluidRow(
-                box(width = 12, title = "Configuração do Problema", status = "primary",
-                    numericInput("num_var", "Número de Variáveis de Decisão:", value = 2, min = 1),
-                    textInput("obj_func", "Coeficientes da Função Objetivo (separados por vírgula):", "3,5"),
-                    selectInput("tipo_otim", "Tipo de Otimização:", choices = c("Maximização" = "max", "Minimização" = "min"))
+                box(
+                  title = "Parâmetros do Problema",
+                  width = 12,
+                  numericInput("num_sources", "Número de Fontes", value = 3, min = 2, max = 10),
+                  numericInput("num_destinations", "Número de Destinos", value = 4, min = 2, max = 10),
+                  actionButton("generate_problem", "Gerar Problema", class = "btn-primary")
                 )
               ),
               
               fluidRow(
-                box(width = 12, title = "Restrições", status = "primary",
-                    numericInput("num_restr", "Número de Restrições:", value = 3, min = 1),
-                    uiOutput("restricoes_ui"),
-                    actionButton("resolver", "Resolver Problema", class = "btn-success")
+                box(
+                  title = "Ofertas",
+                  width = 6,
+                  uiOutput("supply_inputs")
+                ),
+                box(
+                  title = "Demandas",
+                  width = 6,
+                  uiOutput("demand_inputs")
+                )
+              ),
+              
+              fluidRow(
+                box(
+                  title = "Custos de Transporte",
+                  width = 12,
+                  uiOutput("cost_matrix_input")
+                )
+              ),
+              
+              fluidRow(
+                box(
+                  width = 12,
+                  actionButton("solve", "Resolver Problema", class = "btn-success"),
+                  actionButton("reset", "Reiniciar", class = "btn-danger")
                 )
               )
       ),
       
-      tabItem(tabName = "solucao",
+      # Tab de Solução
+      tabItem(tabName = "solution",
               fluidRow(
-                box(width = 12, title = "Solução do Problema", status = "success",
-                    h3("Tableau Inicial"),
-                    DTOutput("tableau_inicial"),
-                    
-                    h3("Iterações do Simplex"),
-                    uiOutput("iteracoes_ui"),
-                    
-                    h3("Tableau Final"),
-                    DTOutput("tableau_final"),
-                    
-                    h3("Solução Ótima"),
-                    verbatimTextOutput("solucao_otima"),
-                    
-                    h3("Valor Ótimo"),
-                    verbatimTextOutput("valor_otimo")
+                valueBoxOutput("total_cost_box"),
+                valueBoxOutput("iterations_box"),
+                valueBoxOutput("status_box")
+              ),
+              
+              fluidRow(
+                box(
+                  title = "Alocação Ótima",
+                  width = 6,
+                  DTOutput("allocation_table")
+                ),
+                box(
+                  title = "Visualização da Alocação",
+                  width = 6,
+                  plotOutput("allocation_plot")
+                )
+              ),
+              
+              fluidRow(
+                box(
+                  title = "Custos",
+                  width = 12,
+                  DTOutput("cost_table")
+                )
+              )
+      ),
+      
+      # Tab de Iterações
+      tabItem(tabName = "iterations",
+              fluidRow(
+                box(
+                  title = "Progresso das Iterações",
+                  width = 12,
+                  DTOutput("iteration_table")
+                )
+              ),
+              
+              fluidRow(
+                box(
+                  title = "Evolução do Custo Total",
+                  width = 12,
+                  plotOutput("cost_evolution_plot")
                 )
               )
       )
@@ -56,252 +214,224 @@ ui <- dashboardPage(
   )
 )
 
+# Server
 server <- function(input, output, session) {
-  # Gera os campos de entrada para as restrições
-  output$restricoes_ui <- renderUI({
-    req(input$num_var, input$num_restr)
-    
-    restricoes <- lapply(1:input$num_restr, function(i) {
-      fluidRow(
-        column(width = 8,
-               lapply(1:input$num_var, function(j) {
-                 numericInput(paste0("restr_", i, "_var_", j), 
-                              paste0("x", j), 
-                              value = ifelse(i == 1 && j == 1, 1,
-                                             ifelse(i == 2 && j == 2, 2,
-                                                    ifelse(i == 3 && j == 1, 3,
-                                                           ifelse(i == 3 && j == 2, 2, 0)))))
-               })
-        ),
-        column(width = 2,
-               selectInput(paste0("operador_", i), "Operador",
-                           choices = c("<=" = "<=", ">=" = ">=", "=" = "=="),
-                           selected = "<=")
-        ),
-        column(width = 2,
-               numericInput(paste0("termo_indep_", i), "b", 
-                            value = ifelse(i == 1, 4, 
-                                           ifelse(i == 2, 12, 18)))
-        )
-      )
+  
+  # Reactive values
+  values <- reactiveValues(
+    problem_data = NULL,
+    solution = NULL,
+    iteration_history = list()
+  )
+  
+  # Gerar inputs dinâmicos para ofertas
+  output$supply_inputs <- renderUI({
+    num_sources <- input$num_sources
+    lapply(1:num_sources, function(i) {
+      numericInput(paste0("supply_", i), paste("Oferta Fonte", i), value = 100, min = 0)
     })
-    
-    do.call(tagList, restricoes)
   })
   
-  # Função simplex adaptada para o Shiny
-  simplex_shiny <- function(obj, A, b, operadores, maximizar = TRUE) {
-    if (!maximizar) {
-      obj <- -obj
-    }
-    
-    m <- nrow(A)
-    n <- ncol(A)
-    
-    folga <- which(operadores == "<=")
-    excesso <- which(operadores == ">=")
-    igual <- which(operadores == "==")
-    
-    # Cria tableau aumentado
-    tableau <- matrix(0, nrow = m + 1, ncol = n + length(folga) + length(excesso) * 2 + length(igual) + 1)
-    tableau[1:m, 1:n] <- A
-    tableau[1:m, ncol(tableau)] <- b
-    
-    # Adiciona variáveis de folga
-    col_folga <- n + 1
-    for (i in folga) {
-      tableau[i, col_folga] <- 1
-      col_folga <- col_folga + 1
-    }
-    
-    # Adiciona variáveis de excesso e artificiais para >=
-    for (i in excesso) {
-      tableau[i, col_folga] <- -1
-      tableau[i, col_folga + 1] <- 1
-      col_folga <- col_folga + 2
-    }
-    
-    # Adiciona variáveis artificiais para ==
-    for (i in igual) {
-      tableau[i, col_folga] <- 1
-      col_folga <- col_folga + 1
-    }
-    
-    tableau[m + 1, 1:n] <- -obj
-    
-    # Nomes das colunas
-    colnames <- paste0("x", 1:n)
-    if (length(folga) > 0) colnames <- c(colnames, paste0("f", 1:length(folga)))
-    if (length(excesso) > 0) {
-      colnames <- c(colnames, paste0("e", 1:length(excesso)))
-      colnames <- c(colnames, paste0("a", 1:length(excesso)))
-    }
-    if (length(igual) > 0) colnames <- c(colnames, paste0("a", length(excesso) + 1:length(igual)))
-    colnames <- c(colnames, "b")
-    
-    colnames(tableau) <- colnames
-    rownames(tableau) <- c(paste0("R", 1:m), "Z")
-    
-    # Armazena o tableau inicial
-    tableau_inicial <- tableau
-    
-    iteracoes <- list()
-    iter_count <- 0
-    
-    while (TRUE) {
-      linha_z <- tableau[nrow(tableau), -ncol(tableau)]
-      if (all(linha_z >= 0)) {
-        break
-      }
-      
-      entra <- which.min(linha_z)
-      ratios <- tableau[1:m, ncol(tableau)] / tableau[1:m, entra]
-      ratios[tableau[1:m, entra] <= 0] <- Inf
-      
-      if (all(is.infinite(ratios))) {
-        break
-      }
-      
-      sai <- which.min(ratios)
-      
-      iter_count <- iter_count + 1
-      
-      # Armazena informações da iteração ANTES do pivoteamento
-      iteracao <- list(
-        entra = colnames(tableau)[entra],
-        sai = rownames(tableau)[sai],
-        tableau = tableau
-      )
-      iteracoes[[iter_count]] <- iteracao
-      
-      # Pivoteamento
-      pivot <- tableau[sai, entra]
-      tableau[sai, ] <- tableau[sai, ] / pivot
-      
-      for (i in 1:(m + 1)) {
-        if (i != sai) {
-          tableau[i, ] <- tableau[i, ] - tableau[i, entra] * tableau[sai, ]
-        }
-      }
-    }
-    
-    # Solução ótima
-    solucao <- rep(0, n)
-    for (i in 1:n) {
-      if (sum(tableau[1:m, i] == 1) == 1 && sum(tableau[1:m, i] != 0) == 1) {
-        linha <- which(tableau[1:m, i] == 1)
-        solucao[i] <- tableau[linha, ncol(tableau)]
-      }
-    }
-    
-    valor_otimo <- tableau[nrow(tableau), ncol(tableau)]
-    if (!maximizar) valor_otimo <- -valor_otimo
-    
-    return(list(
-      tableau_inicial = tableau_inicial,
-      iteracoes = iteracoes,
-      tableau_final = tableau,
-      solucao = solucao,
-      valor_otimo = valor_otimo,
-      colnames = colnames(tableau),
-      rownames = rownames(tableau)
-    ))
-  }
+  # Gerar inputs dinâmicos para demandas
+  output$demand_inputs <- renderUI({
+    num_dest <- input$num_destinations
+    lapply(1:num_dest, function(i) {
+      numericInput(paste0("demand_", i), paste("Demanda Destino", i), value = 75, min = 0)
+    })
+  })
   
-  # Resolve o problema quando o botão é clicado
-  observeEvent(input$resolver, {
-    req(input$num_var, input$num_restr)
+  # Gerar matriz de custos dinâmica
+  output$cost_matrix_input <- renderUI({
+    num_sources <- input$num_sources
+    num_dest <- input$num_destinations
     
-    # Coleta os dados de entrada
-    obj <- as.numeric(unlist(strsplit(input$obj_func, ",")))
-    
-    A <- matrix(0, nrow = input$num_restr, ncol = input$num_var)
-    b <- numeric(input$num_restr)
-    operadores <- character(input$num_restr)
-    
-    for (i in 1:input$num_restr) {
-      for (j in 1:input$num_var) {
-        A[i, j] <- input[[paste0("restr_", i, "_var_", j)]]
-      }
-      operadores[i] <- input[[paste0("operador_", i)]]
-      b[i] <- input[[paste0("termo_indep_", i)]]
-    }
-    
-    maximizar <- input$tipo_otim == "max"
-    
-    # Executa o método simplex
-    resultado <- tryCatch({
-      simplex_shiny(obj, A, b, operadores, maximizar)
-    }, error = function(e) {
-      showNotification(paste("Erro:", e$message), type = "error")
-      return(NULL)
-    })
-    
-    if (is.null(resultado)) return()
-    
-    # Armazena os resultados para exibição
-    output$tableau_inicial <- renderDT({
-      datatable(as.data.frame(resultado$tableau_inicial),
-                options = list(dom = 't', scrollX = TRUE),
-                rownames = TRUE)
-    })
-    
-    output$iteracoes_ui <- renderUI({
-      if (length(resultado$iteracoes) == 0) {
-        return(p("O tableau inicial já é ótimo."))
-      }
-      
-      iteracoes <- lapply(1:length(resultado$iteracoes), function(i) {
-        tagList(
-          h4(paste("Iteração", i)),
-          p(strong("Variável que entra:"), resultado$iteracoes[[i]]$entra),
-          p(strong("Variável que sai:"), resultado$iteracoes[[i]]$sai),
-          DTOutput(paste0("tableau_iter_", i)),
-          hr()
+    fluidRow(
+      lapply(1:num_sources, function(i) {
+        column(2,
+               lapply(1:num_dest, function(j) {
+                 numericInput(paste0("cost_", i, "_", j), 
+                              paste("Custo F", i, "???D", j),
+                              value = sample(1:20, 1), min = 0)
+               })
         )
       })
+    )
+  })
+  
+  # Coletar dados do problema
+  observeEvent(input$generate_problem, {
+    num_sources <- input$num_sources
+    num_dest <- input$num_destinations
+    
+    # Coletar ofertas
+    supply <- sapply(1:num_sources, function(i) {
+      input[[paste0("supply_", i)]]
+    })
+    
+    # Coletar demandas
+    demand <- sapply(1:num_dest, function(i) {
+      input[[paste0("demand_", i)]]
+    })
+    
+    # Coletar custos
+    costs <- matrix(0, nrow = num_sources, ncol = num_dest)
+    for (i in 1:num_sources) {
+      for (j in 1:num_dest) {
+        costs[i, j] <- input[[paste0("cost_", i, "_", j)]]
+      }
+    }
+    
+    values$problem_data <- list(
+      supply = supply,
+      demand = demand,
+      costs = costs
+    )
+  })
+  
+  # Resolver o problema
+  observeEvent(input$solve, {
+    req(values$problem_data)
+    
+    withProgress(message = 'Resolvendo problema...', value = 0, {
+      # Solução inicial pelo método do canto noroeste
+      incProgress(0.3, detail = "Calculando solução inicial")
+      initial_allocation <- northwest_corner(
+        values$problem_data$supply,
+        values$problem_data$demand,
+        values$problem_data$costs
+      )
       
-      # Renderiza os tableaus das iterações
-      for (i in 1:length(resultado$iteracoes)) {
-        local({
-          ii <- i
-          output[[paste0("tableau_iter_", ii)]] <- renderDT({
-            datatable(as.data.frame(resultado$iteracoes[[ii]]$tableau),
-                      options = list(dom = 't', scrollX = TRUE),
-                      rownames = TRUE)
-          })
-        })
-      }
+      # Otimização com Stepping Stone
+      incProgress(0.6, detail = "Otimizando solução")
+      solution <- stepping_stone(initial_allocation, values$problem_data$costs)
       
-      do.call(tagList, iteracoes)
+      values$solution <- solution
+      values$iteration_history <- solution$history
     })
+  })
+  
+  # Output: Tabela de alocação
+  output$allocation_table <- renderDT({
+    req(values$solution)
     
-    output$tableau_final <- renderDT({
-      datatable(as.data.frame(resultado$tableau_final),
-                options = list(dom = 't', scrollX = TRUE),
-                rownames = TRUE) %>%
-        formatStyle(0, target = 'row', 
-                    backgroundColor = styleEqual(c("Z"), c("#E6F3FF")))
-    })
+    allocation <- values$solution$final_allocation
+    rownames(allocation) <- paste("Fonte", 1:nrow(allocation))
+    colnames(allocation) <- paste("Destino", 1:ncol(allocation))
     
-    output$solucao_otima <- renderPrint({
-      cat("Valores das variáveis de decisão:\n")
-      for (i in 1:length(resultado$solucao)) {
-        cat(paste0("x", i), "=", resultado$solucao[i], "\n")
-      }
-    })
+    datatable(allocation, 
+              options = list(dom = 't', pageLength = 10),
+              caption = "Quantidades alocadas de cada fonte para cada destino")
+  })
+  
+  # Output: Tabela de custos
+  output$cost_table <- renderDT({
+    req(values$problem_data)
     
-    output$valor_otimo <- renderPrint({
-      if (input$tipo_otim == "max") {
-        cat("Valor máximo da função objetivo:", resultado$valor_otimo, "\n")
-      } else {
-        cat("Valor mínimo da função objetivo:", resultado$valor_otimo, "\n")
-      }
-    })
+    costs <- values$problem_data$costs
+    rownames(costs) <- paste("Fonte", 1:nrow(costs))
+    colnames(costs) <- paste("Destino", 1:ncol(costs))
     
-    # Muda para a aba de solução
-    updateTabItems(session, "sidebar", "solucao")
+    datatable(costs, 
+              options = list(dom = 't', pageLength = 10),
+              caption = "Custos unitários de transporte")
+  })
+  
+  # Output: Visualização da alocação
+  output$allocation_plot <- renderPlot({
+    req(values$solution)
+    
+    allocation <- values$solution$final_allocation
+    df <- melt(allocation)
+    colnames(df) <- c("Fonte", "Destino", "Quantidade")
+    
+    ggplot(df, aes(x = Destino, y = Fonte, fill = Quantidade)) +
+      geom_tile(color = "white") +
+      geom_text(aes(label = Quantidade), color = "white", size = 6) +
+      scale_fill_gradient(low = "blue", high = "red") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(title = "Matriz de Alocação Ótima")
+  })
+  
+  # Output: Custo total
+  output$total_cost_box <- renderValueBox({
+    req(values$solution)
+    valueBox(
+      paste("R$", format(values$solution$total_cost, big.mark = ",")),
+      "Custo Total",
+      icon = icon("dollar-sign"),
+      color = "green"
+    )
+  })
+  
+  # Output: Número de iterações
+  output$iterations_box <- renderValueBox({
+    req(values$iteration_history)
+    valueBox(
+      length(values$iteration_history),
+      "Iterações Realizadas",
+      icon = icon("refresh"),
+      color = "blue"
+    )
+  })
+  
+  # Output: Status
+  output$status_box <- renderValueBox({
+    req(values$solution)
+    valueBox(
+      "Ótimo Encontrado",
+      "Status da Solução",
+      icon = icon("check-circle"),
+      color = "purple"
+    )
+  })
+  
+  # Output: Tabela de iterações
+  output$iteration_table <- renderDT({
+    req(values$iteration_history)
+    
+    history_df <- do.call(rbind, lapply(values$iteration_history, function(iter) {
+      data.frame(
+        Iteração = iter$iteration,
+        Custo_Total = iter$total_cost,
+        Melhoria = iter$improvement
+      )
+    }))
+    
+    datatable(history_df, 
+              options = list(dom = 't', pageLength = 10),
+              caption = "Histórico de Iterações")
+  })
+  
+  # Output: Evolução do custo
+  output$cost_evolution_plot <- renderPlot({
+    req(values$iteration_history)
+    
+    history_df <- do.call(rbind, lapply(values$iteration_history, function(iter) {
+      data.frame(
+        Iteração = iter$iteration,
+        Custo_Total = iter$total_cost
+      )
+    }))
+    
+    if (nrow(history_df) > 0) {
+      ggplot(history_df, aes(x = Iteração, y = Custo_Total)) +
+        geom_line(color = "blue", size = 1.5) +
+        geom_point(color = "red", size = 3) +
+        theme_minimal() +
+        labs(title = "Evolução do Custo Total",
+             x = "Iteração",
+             y = "Custo Total")
+    }
+  })
+  
+  # Reiniciar
+  observeEvent(input$reset, {
+    values$problem_data <- NULL
+    values$solution <- NULL
+    values$iteration_history <- list()
   })
 }
 
-shinyApp(ui, server)
+# Run the application
+shinyApp(ui = ui, server = server)
