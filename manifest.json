@@ -983,6 +983,28 @@
         "Built": "R 4.4.0; ; 2024-04-25 19:44:44 UTC; unix"
       }
     },
+    "lpSolve": {
+      "Source": "CRAN",
+      "Repository": "http://rspm/default/latest",
+      "description": {
+        "Package": "lpSolve",
+        "Version": "5.6.23",
+        "Title": "Interface to 'Lp_solve' v. 5.5 to Solve Linear/Integer Programs",
+        "Authors@R": "c(\n    person(\"Gábor\", \"Csárdi\", , \"csardi.gabor@gmail.com\", role = \"cre\"),\n    person(\"Michel\", \"Berkelaar\", role = \"aut\")\n  )",
+        "Description": "Lp_solve is freely available (under LGPL 2) software for\n        solving linear, integer and mixed integer programs. In this\n        implementation we supply a \"wrapper\" function in C and some R\n        functions that solve general linear/integer problems,\n        assignment problems, and transportation problems. This version\n        calls lp_solve version 5.5.",
+        "License": "LGPL-2",
+        "URL": "https://github.com/gaborcsardi/lpSolve",
+        "BugReports": "https://github.com/gaborcsardi/lpSolve/issues",
+        "Encoding": "UTF-8",
+        "NeedsCompilation": "yes",
+        "Packaged": "2024-12-13 22:30:07 UTC; gaborcsardi",
+        "Author": "Gábor Csárdi [cre],\n  Michel Berkelaar [aut]",
+        "Maintainer": "Gábor Csárdi <csardi.gabor@gmail.com>",
+        "Repository": "RSPM",
+        "Date/Publication": "2024-12-14 00:30:02 UTC",
+        "Built": "R 4.4.3; x86_64-pc-linux-gnu; 2025-06-14 22:16:16 UTC; unix"
+      }
+    },
     "magrittr": {
       "Source": "CRAN",
       "Repository": "http://rspm/default/latest",
@@ -1805,7 +1827,7 @@
   },
   "files": {
     "app.R": {
-      "checksum": "43cdf2d66b0c399a0bb6d05b8ed4d242"
+      "checksum": "72ab87139468dc34a969ce6c7c05e208"
     }
   },
   "users": null
